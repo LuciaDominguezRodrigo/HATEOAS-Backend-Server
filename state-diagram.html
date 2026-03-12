@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Iberia HATEOAS Dashboard - Terminal Sync</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'neutral' });
+  </script>
+  <style>
+    :root { --iberia-red: #D7192D; --dark: #2c3e50; --bg: #f4f7f6; --terminal-green: #55efc4; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: var(--dark); margin: 0; padding: 20px; }
+    h1 { color: var(--iberia-red); text-align: center; border-bottom: 3px solid var(--iberia-red); padding-bottom: 10px; }
+    .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; }
+    .btn-group { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }
+    button { padding: 12px 18px; border: none; border-radius: 8px; cursor: pointer; background: #dfe6e9; font-weight: bold; transition: 0.3s; }
+    button:hover { background: #b2bec3; }
+    button.active { background: var(--iberia-red); color: white; transform: scale(1.05); }
+    pre { background: #2d3436; color: #74b9ff; padding: 15px; border-radius: 8px; overflow: auto; font-size: 13px; height: 300px; border-left: 5px solid var(--iberia-red); }
+    .badge { padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; text-transform: uppercase; }
+    .booked { background: #e3f2fd; color: #1976d2; }
+    .cancelled { background: #ffebee; color: #c62828; }
+    .terminal { background: #1e1e1e; color: var(--terminal-green); padding: 20px; border-radius: 8px; font-family: 'Courier New', monospace; height: 350px; overflow-y: auto; font-size: 13px; line-height: 1.4; border: 2px solid #34495e; }
+    .json-log { color: #fab1a0; font-size: 11px; white-space: pre-wrap; display: block; margin: 10px 0; border-left: 2px solid #636e72; padding-left: 10px; }
+    .info-box { background: #fff3f3; border-left: 4px solid var(--iberia-red); padding: 15px; margin-bottom: 15px; font-style: italic; }
+  </style>
+</head>
+<body>
+
+  <h1>Visualizador de Estados HATEOAS - Iberia</h1>
+
+  <div class="card">
+    <div class="mermaid" style="display: flex; justify-content: center;">
+      stateDiagram-v2
+        [*] --> BOOKED : POST /reservations
+        BOOKED --> BOOKED : add-baggage
+        BOOKED --> CHECKED_IN : check-in
+        CHECKED_IN --> UPGRADED : upgrade-class
+        CHECKED_IN --> CANCELLED : cancel
+        BOOKED --> CANCELLED : cancel
+        CANCELLED --> [*]
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="btn-group">
+        <button onclick="change(1, this)" id="btn-1">1. Crear Reserva</button>
+        <button onclick="change(1.1, this)">1.1 +Equipaje</button>
+        <button onclick="change(2, this)">2. Check-in</button>
+        <button onclick="change(3, this)">3. Upgrade</button>
+        <button onclick="change(4, this)">4. Cancelar</button>
+      </div>
+      <div class="info-box" id="desc">Selecciona una acción para interactuar con la API en tiempo real.</div>
+      <pre id="json-output">{ "esperando": "acción..." }</pre>
+    </div>
+
+    <div class="card">
+      <h3>Control de Estado</h3>
+      <p>Estado Actual: <span id="st-badge" class="badge booked">IDLE</span></p>
+      <hr>
+      <p><strong>Enlaces HATEOAS detectados:</strong></p>
+      <ul id="actions" style="font-size: 14px; line-height: 2;"></ul>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Terminal de Depuración: <small style="color: #636e72;">./test-hateoas.sh</small></h3>
+    <div id="terminal" class="terminal">Esperando inicio de prueba...</div>
+    <button onclick="runBashSimulation()" style="margin-top: 15px; background: #6c5ce7; color: white; width: 100%; height: 50px; font-size: 16px; font-weight: bold; border-radius: 8px;">
+      ▶️ EJECUTAR FLUJO COMPLETO AUTOMÁTICO
+    </button>
+  </div>
+
+  <script>
+    const API_URL = "/reservations"; 
+    let currentReservationId = null;
+
+    async function updateUI(data, description) {
+      document.getElementById('desc').innerHTML = description;
+      document.getElementById('json-output').textContent = JSON.stringify(data, null, 2);
+      
+      const status = data.status || (data.checkedIn ? "CHECKED_IN" : "BOOKED");
+      const badge = document.getElementById('st-badge');
+      badge.textContent = status;
+      badge.className = "badge " + (status === "CANCELLED" ? "cancelled" : "booked");
+      
+      if (data._links) {
+        const actionsHtml = data._links.map(link => 
+          `<li><b>${link.rel}</b> <span style="color:#b2bec3;">(${link.method})</span></li>`
+        ).join('');
+        document.getElementById('actions').innerHTML = actionsHtml;
+      }
+    }
+
+    async function change(step, el) {
+      if(el) {
+        document.querySelectorAll('.btn-group button').forEach(b => b.classList.remove('active'));
+        el.classList.add('active');
+      }
+
+      try {
+        let res;
+        if (step === 1) {
+          res = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ flightTime: "12:00", passengers: 1 })
+          });
+        } else {
+          if (!currentReservationId) return alert("Crea una reserva primero");
+          
+          const config = {
+            1.1: { p: "add-baggage", m: "POST", b: { count: 1 } },
+            2:   { p: "check-in", m: "POST" },
+            3:   { p: "upgrade-class", m: "PUT", b: { newClass: "Business" } },
+            4:   { p: "cancel", m: "POST" }
+          }[step];
+
+          res = await fetch(`${API_URL}/${currentReservationId}/${config.p}`, {
+            method: config.m,
+            headers: { "Content-Type": "application/json" },
+            body: config.b ? JSON.stringify(config.b) : null
+          });
+        }
+
+        const data = await res.json();
+        if (data.id) currentReservationId = data.id;
+
+        const texts = {
+          1: "Reserva creada. Todos los enlaces de gestión están activos.",
+          1.1: "Equipaje añadido. El estado sigue siendo BOOKED.",
+          2: "Check-in realizado. Los enlaces de edición han sido eliminados por seguridad.",
+          3: "Clase Business confirmada. El enlace de Upgrade desaparece.",
+          4: "Reserva cancelada. Fin del proceso."
+        };
+
+        updateUI(data, texts[Math.floor(step)]);
+        return data;
+      } catch (err) {
+        document.getElementById('json-output').textContent = "Error de conexión: " + err.message;
+      }
+    }
+
+    async function runBashSimulation() {
+      const term = document.getElementById('terminal');
+      term.innerHTML = "🚀 <span style='color: #ffeaa7;'>INICIANDO TEST HATEOAS AUTOMATIZADO</span><br>";
+      
+      const steps = [
+        { s: 1, t: "GET /reservations (POST)" },
+        { s: 1.1, t: "POST /add-baggage" },
+        { s: 2, t: "POST /check-in" },
+        { s: 3, t: "PUT /upgrade-class" },
+        { s: 4, t: "POST /cancel" }
+      ];
+
+      for (const step of steps) {
+        term.innerHTML += `<br><span style='color: #74b9ff;'>$ curl -X ${step.t}</span>`;
+        
+        // Ejecución
+        const data = await change(step.s);
+        
+        // Formateo del JSON para mostrar en terminal
+        const jsonFormatted = JSON.stringify(data, null, 2);
+        term.innerHTML += `<div class="json-log">${jsonFormatted}</div>`;
+        
+        term.innerHTML += `<span style='color: #55efc4;'>HTTP/1.1 200 OK</span><br>`;
+        
+        // Scroll automático
+        term.scrollTop = term.scrollHeight;
+        
+        // Pausa dramática para lectura
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      
+      term.innerHTML += "<br><br><span style='color: #55efc4; font-weight: bold; border: 1px solid;'> [SUCCESS] FLUJO FINALIZADO </span>";
+      term.scrollTop = term.scrollHeight;
+    }
+
+    window.onload = () => document.getElementById('btn-1').click();
+  </script>
+</body>
+</html>
